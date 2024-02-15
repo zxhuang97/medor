@@ -2,6 +2,10 @@
 
 
 # Installation
+## Clone the repo
+```
+git clone --recursive git@github.com:zxhuang97/medor.git
+```
 ## Configure python environment
 `Mamba` is highly recommended for configuring the python environment. It's a drop-in replacement for `conda` but much faster. 
 ```
@@ -43,7 +47,7 @@ If you only want to run the demo, you can download the test set alone.
 - [Test set](https://drive.google.com/file/d/1klTUl5xaja3izQ5GoLjDPn88dwbkrERo/view?usp=sharing)
 
 ## Demo
-Download the pretrained model and put it under `data/release`.
+Download the [pretrained model](https://drive.google.com/file/d/1Tv5lJuuqI1QLQctgxwtDIebaKeoxp59v/view?usp=sharing) and put it under `data/release`.
 ```angular2html
 data
 └── release
