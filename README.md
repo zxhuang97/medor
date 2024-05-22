@@ -1,5 +1,5 @@
 # MEDOR
-
+Official codebase for Mesh-based dynamics with occlusion reasoning for cloth manipulation
 
 # Installation
 ## Clone the repo
