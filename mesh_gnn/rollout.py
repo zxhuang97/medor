@@ -126,8 +126,6 @@ def rollout_worker(inputs):
         model_positions = np.zeros((planning_horizon, len(particle_pos), 3))
         shape_positions = np.zeros((planning_horizon, 2, 3))
         initial_particle_pos = particle_pos.copy()
-        pred_rewards = np.zeros(planning_horizon)
-        gt_pos_rewards = np.zeros(planning_horizon)
         # print('vcd_edge is working ', vcd_edge)
         # get the mesh edge prediction using the mesh edge model
         if (vcd_edge is not None and mesh_edges is None) or m_name == 'vsbl':
@@ -136,8 +134,6 @@ def rollout_worker(inputs):
             mesh_edges = vcd_edge.infer_mesh_edges(model_input_data)
 
         # for ablation that uses first-time step collision edges as the mesh edges
-
-        ret = 0
         final_ret = 0
         gt_rewards = []
 
@@ -224,9 +220,7 @@ def rollout_worker(inputs):
             with torch.no_grad():
                 pred = cur_dyn(inputs)
                 pred_accel = pred['accel']
-                pred_reward = pred.get('reward_nxt', -torch.ones(1, dtype=torch.float).to(cur_dyn.device))
             pred_accel = pred_accel.cpu().numpy()
-            pred_reward = pred_reward.cpu().numpy()
             model_foward_time.append(time.time() - beg)
 
             # update graph
@@ -237,23 +231,12 @@ def rollout_worker(inputs):
             update_graph_time.append(time.time() - beg)
 
             # get reward of the new position
-            if robot_exp:
-                # reward_pos = np.vstack(
-                #     [filtered_initial_particle, particle_pos])  # Should be equivalent to adding occluded particles
-                reward_pos = particle_pos
-            else:
-                reward_pos = particle_pos
-            # if input['reward_mode'] == 'vis':
-            #     reward_pos = reward_pos[model_input_data['model_vis']]
+            reward_pos = particle_pos
 
             # heuristic reward
 
             reward = reward_model(reward_pos) if reward_model is not None else 0
-            # print("time step {} reward {}".format(t, reward))
-            ret += reward
 
-            pred_rewards[t] = pred_reward
-            gt_pos_rewards[t] = reward
             if t == planning_horizon - 1:
                 # print(model_canon_pos.mean())
                 if task == 'flatten':
@@ -283,8 +266,6 @@ def rollout_worker(inputs):
             info=info,
             mesh_edges=mesh_edges,
             time_cost=time_cost,
-            pred_rewards=pred_rewards,
-            gt_pos_rewards=gt_pos_rewards
         ))
     return results
 

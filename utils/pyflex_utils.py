@@ -86,7 +86,7 @@ def pc_reward_model(pos, cloth_particle_radius=0.00625, downsample_scale=3):
     return res
 
 
-def coverage_reward(pos, cloth_particle_radius=0.00625, downsample_scale=3):
+def coverage_reward(pos, cloth_particle_radius=0.00625, downsample_scale=1):
     cloth_particle_radius *= downsample_scale
     pos = np.reshape(pos, [-1, 3])
 
