@@ -34,7 +34,7 @@ model_path:
   Trousers: data/train/0112-noise-flowTrousers_v2/None
 pred_time_interval: 5
 full_dyn_path: data/train/trousers_gnn_old/1119-trousers-5000-full_1/full_dyn_75.pth
-finetune: true
+
 opt_model: false
 opt_mesh_density: dense
 opt_mesh_init: task
@@ -52,7 +52,7 @@ table_w: 10
 reward_mode: full
 reload_path: null
 cloth_type: Trousers
-pick_and_place_num: 1
+pick_and_place_num: 10
 ambiguity_agnostic: true
 task: flatten
 canon_model: sim

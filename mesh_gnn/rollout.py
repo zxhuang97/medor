@@ -115,7 +115,6 @@ def rollout_worker(inputs):
         velocity_his = model_input_data['vel_his']
         picker_pos = model_input_data['picker_position']
         picked_particles = model_input_data['picked_points']
-        scene_params = model_input_data['scene_params']
         observable_particle_index = model_input_data['mapped_particle_indices']
         rest_dist = model_input_data.get('rest_dist', None)
         mesh_edges = model_input_data.get('mesh_edges', None)
@@ -155,43 +154,21 @@ def rollout_worker(inputs):
                 velocity_his = np.zeros_like(velocity_his)
 
             beg = time.time()
-            if not robot_exp:
-                data = {
-                    'particles': particle_pos,
-                    'vel_his': velocity_his,
-                    'picker_position': picker_pos,
-                    'action': action,
-                    'picked_points': picked_particles,
-                    'scene_params': scene_params,
-                    'mapped_particle_indices': observable_particle_index,
-                    'mesh_edges': mesh_edges,
-                    'rest_dist': rest_dist,
-                    'initial_particle_pos': initial_particle_pos
-                }
+            data = {
+                'particles': particle_pos,
+                'vel_his': velocity_his,
+                'picker_position': picker_pos,
+                'action': action,
+                'picked_points': picked_particles,
+                'mapped_particle_indices': observable_particle_index,
+                'mesh_edges': mesh_edges,
+                'rest_dist': rest_dist,
+                'initial_particle_pos': initial_particle_pos
+            }
 
-                data_dict = dataset.build_graph(data, input_type=m_name)
+            data_dict = dataset.build_graph(data, input_type=m_name)
 
-            else:  # robot exp
-                # data = [particle_pos, velocity_his, picker_pos,
-                #         action, picked_particles, scene_params, range(observable_pc_num), mesh_edges]
-                data = {
-                    'pointcloud': particle_pos,
-                    'vel_his': velocity_his,
-                    'picker_position': picker_pos,
-                    'action': action,
-                    'picked_points': picked_particles,
-                    'scene_params': scene_params,
-                    'mapped_particle_indices': range(len(particle_pos)),
-                    'mesh_edges': mesh_edges,
-                    'rest_dist': rest_dist,
-                    'initial_particle_pos': initial_particle_pos
-                }
-                data_dict = dataset._prepare_input(
-                    data,
-                    input_type=m_name,
-                    downsample=False,
-                    noise_scale=0,
-                    robot_exp=robot_exp)
+
 
             node_attr, neighbors, edge_attr, picked_particles, picked_status = data_dict['node_attr'], \
                                                                                data_dict['neighbors'], \

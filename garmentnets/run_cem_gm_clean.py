@@ -40,7 +40,6 @@ import pytorch_lightning.utilities.seed as seed_utils
 render_env = None
 
 
-
 def set_picker_pos(pos):
     shape_states = pyflex.get_shape_states().reshape((-1, 14))
     shape_states[1, :3] = -1
@@ -53,7 +52,7 @@ def set_picker_pos(pos):
 
 
 def prepare_policy(env):
-    print("preparing policy! ", flush=True)
+    print("preparing policy! ")
 
     # move one of the picker to be under ground
     shape_states = pyflex.get_shape_states().reshape(-1, 14)
@@ -85,118 +84,189 @@ def create_env(vv):
     env_args['cached_states_path'] = vv['cached_states_path']
     env_args['cloth_type'] = vv['cloth_type']
     env_args['ambiguity_agnostic'] = vv.get('ambiguity_agnostic', False)
-    
+
     env = SOFTGYM_ENVS[vv['env_name']](**env_args)
-    
+
     render_env_kwargs = copy.deepcopy(env_args)
     render_env_kwargs['render_mode'] = 'particle'
     render_env_kwargs['particle_radius'] = vv['radius_r']
-    
+
     io_pool = Pool(1, initializer=init_io_worker,
-                initargs=(SOFTGYM_ENVS[vv['env_name']], render_env_kwargs))
-                
+                   initargs=(SOFTGYM_ENVS[vv['env_name']], render_env_kwargs))
+
     return env, io_pool
 
 
-def run_task(vv, log_dir, exp_name):
+def create_dynamics(vv, env):
+    model_vv_dir = osp.dirname(vv["full_dyn_path"])
+    model_vv = json.load(open(osp.join(model_vv_dir, 'variant.json')))
+    model_vv['full_dyn_path'] = vv['full_dyn_path']
+    model_vv['eval'] = True
+    model_vv['load_optim'] = False
+    vv['pred_time_interval'] = model_vv['pred_time_interval']
+    dyn_args = OmegaConf.create(model_vv)
+    return MeshDynamics(dyn_args, env=env)
+
+
+def create_medor_model(vv):
+    vv['model_path'] = vv['model_path'][vv['cloth_type']]
+    cfg = OmegaConf.load(vv['model_path'] + '/config.yaml')
+    cfg = update_config(cfg, vv)
+    pred_cfg = OmegaConf.load('garmentnets/config/predict_default.yaml')
+    cfg['prediction'] = pred_cfg.prediction
+    batch_size = 1
+    if cfg.input_type == 'pc':
+        pointnet2_model = PointNet2NOCS.load_from_checkpoint(
+            find_best_checkpoint(cfg.canon_checkpoint))
+    else:
+        pointnet2_model = HRNet2NOCS.load_from_checkpoint(
+            find_best_checkpoint(cfg.canon_checkpoint))
+    pointnet2_params = dict(pointnet2_model.hparams)
+    cloth_meta = OmegaConf.load("configs/cloth_nocs_aabb.yaml")
+    cloth_nocs_aabb = np.array(cloth_meta[cfg.cloth_type], dtype=np.float32)
+    pipeline_model = ConvImplicitWNFPipeline(cfg,
+                                             pointnet2_params=pointnet2_params,
+                                             batch_size=batch_size,
+                                             cloth_nocs_aabb=cloth_nocs_aabb,
+                                             **cfg.conv_implicit_model)
+    pipeline_model.pointnet2_nocs = pointnet2_model
+    pipeline_model.batch_size = batch_size
+    model_path = find_best_checkpoint(vv['model_path'])
+
+    pipeline_state_dict = torch.load(model_path)['state_dict']
+    pipeline_model.load_state_dict(pipeline_state_dict, strict=False)
+    pipeline_model = pipeline_model.cuda()
+    pipeline_model.eval()
+    return pipeline_model
+
+def compute_cloth_mesh_for_planning(vv, medor_model, matrix_world_to_camera, finetune_cfg, env,
+                                    gt_ds_id, gt_ds_edges, gt_face):
+    rgbd = env.get_rgbd(show_picker=False)
+    rgb = rgbd[:, :, :3]
+    depth = rgbd[:, :, 3]
+    # unflattened_depth = depth.copy()
+    medor_cfg = medor_model.cfg
+    positions = pyflex.get_positions().reshape(-1, 4)[:, :3]
+    if vv['pos_mode'] == 'medor':
+        input_dict = process_any_cloth(rgb,
+                                        depth,
+                                        matrix_world_to_camera,
+                                        input_type=medor_cfg.input_type,
+                                        coords=positions,
+                                        cloth_id=env.get_current_config()['cloth_id'],
+                                        cloth_type=vv['cloth_type'])
+        batch_input = Batch.from_data_list([input_dict],
+                                            follow_batch=['cloth_tri', 'cloth_nocs_verts'])
+
+        batch_input = batch_input.to(device=medor_model.device)
+        results = medor_model.predict_mesh(batch_input,
+                                            finetune_cfg=finetune_cfg,
+                                            env=env,
+                                            get_flat_canon_pose=True,
+                                            )[0]
+
+        verts, edges = results['warp_field_ds'], results['mesh_edges_ds'].T
+        faces = results['faces_ds']
+        canon_verts = results['flat_verts_ds']
+        dense_verts = results['warp_field']
+
+        if vv["tt_finetune"]:
+            print('use finetuned ')
+            verts = results['opt_warp_field_ds']
+            dense_verts = results['opt_warp_field']
+        verts_vis, _ = get_visibility_by_rendering(torch.tensor(dense_verts).cuda(),
+                                                    torch.tensor(results['faces']).cuda().long())
+        verts_vis = verts_vis[results['downsample_id']]
+
+    elif vv['pos_mode'] == 'gt':
+        verts, edges, faces = positions[gt_ds_id], gt_ds_edges, gt_face
+        verts_vis = get_visible(matrix_world_to_camera, positions, depth).squeeze()
+        canon_verts = env.canon_poses.copy()
+
+        verts_vis = verts_vis[gt_ds_id]
+        canon_verts = [x[[gt_ds_id]] for x in canon_verts]
+
+    print('Predicted mesh contains {} nodes  {} edges'.format(verts.shape[0], edges.shape[1]))
+
+    picker_position, picked_points = env.action_tool._get_pos()[0], [-1, -1]
+    data = {
+        'verts': verts,
+        'verts_vis': verts_vis,
+        'picker_position': picker_position,
+        # 'action': env.action_space.sample(),
+        'picked_points': picked_points,
+        'mesh_edges': edges,
+        'model_face': faces,
+        'mapped_particle_indices': None,
+        'ds_id': gt_ds_id,
+        'model_canon_pos': canon_verts,
+        'init_pos': env.init_pos,
+        "depth": depth
+    }
+
+    return data
+
+
+def run_task(plan_cfg, log_dir, exp_name):
     set_resource()
     mp.set_start_method('spawn', force=True)
     # Configure logger 
     logger.configure(dir=log_dir, exp_name=exp_name)
     os.makedirs(log_dir, exist_ok=True)
-    seed = vv['seed']
-    
+    seed = plan_cfg.seed
+
     # Dump parameters
     with open(osp.join(logger.get_dir(), 'variant.json'), 'w') as f:
-        json.dump(OmegaConf.to_container(vv), f, indent=2, sort_keys=True)
+        json.dump(OmegaConf.to_container(plan_cfg), f, indent=2, sort_keys=True)
 
-    env, io_pool = create_env(vv)
-    
-    finetune_cfg = {'opt_mesh_density': vv['opt_mesh_density'],
-                    'opt_mesh_init': vv['opt_mesh_init'],
-                    'opt_iter_total': vv['opt_iter_total'],
-                    'chamfer_mode': 'scipy', 'chamfer3d_w': vv['chamfer3d_w'],
-                    'laplacian_w': vv['laplacian_w'], 'normal_w': vv['normal_w'],
-                    'edge_w': vv['edge_w'], 'rest_edge_len': 0.,
-                    'depth_w': vv['depth_w'], 'silhouette_w': vv['silhouette_w'],
-                    'obs_consist_w': vv['obs_consist_w'], 'consist_iter': vv['consist_iter'],
-                    'table_w': vv['table_w'],
-                    'lr': vv['opt_lr'], 'opt_model': vv['opt_model']}
+    env, io_pool = create_env(plan_cfg)
+
+    finetune_cfg = {'opt_mesh_density': plan_cfg.opt_mesh_density,
+                    'opt_mesh_init': plan_cfg.opt_mesh_init,
+                    'opt_iter_total': plan_cfg.opt_iter_total,
+                    'chamfer_mode': 'scipy', 'chamfer3d_w': plan_cfg.chamfer3d_w,
+                    'laplacian_w': plan_cfg.laplacian_w, 'normal_w': plan_cfg.normal_w,
+                    'edge_w': plan_cfg.edge_w, 'rest_edge_len': 0.,
+                    'depth_w': plan_cfg.depth_w, 'silhouette_w': plan_cfg.silhouette_w,
+                    'obs_consist_w': plan_cfg.obs_consist_w, 'consist_iter': plan_cfg.consist_iter,
+                    'table_w': plan_cfg.table_w,
+                    'lr': plan_cfg.opt_lr, 'opt_model': plan_cfg.opt_model}
     finetune_cfg = OmegaConf.create(finetune_cfg)
 
     print(os.getcwd())
-    model_vv_dir = osp.dirname(vv["full_dyn_path"])
-    model_vv = json.load(open(osp.join(model_vv_dir, 'variant.json')))
 
-    # model_vv['debug'] = model_vv.get('debug', vv['debug'])
-    model_vv['full_dyn_path'] = vv['full_dyn_path']
-
-    model_vv['eval'] = True
-    model_vv['load_optim'] = False
-    vv['pred_time_interval'] = model_vv['pred_time_interval']
-    print(model_vv)
-    dyn_args = OmegaConf.create(model_vv)
-    vcdynamics = MeshDynamics(dyn_args, env=env)
-    device = torch.device('cuda:0')
+    mesh_dyn = create_dynamics(plan_cfg, env)
+    dyn_args = mesh_dyn.args
 
     reward_func = partial(coverage_reward,
-                          cloth_particle_radius=vv['radius_r'])
+                          cloth_particle_radius=plan_cfg.radius_r)
     camera_pos, camera_angle = env.get_camera_params()
-    matrix_world_to_camera = get_matrix_world_to_camera(cam_pos=camera_pos,cam_angle=camera_angle)
+    matrix_world_to_camera = get_matrix_world_to_camera(cam_pos=camera_pos, cam_angle=camera_angle)
 
-    if vv['pos_mode'] == 'medor':
-        vv['model_path'] = vv['model_path'][vv['cloth_type']]
-        cfg = OmegaConf.load(vv['model_path'] + '/config.yaml')
-        cfg = update_config(cfg, vv)
-        pred_cfg = OmegaConf.load('garmentnets/config/predict_default.yaml')
-        cfg['prediction'] = pred_cfg.prediction
-        batch_size = 1
-        print(cfg.canon_checkpoint)
-        if cfg.input_type == 'pc':
-            pointnet2_model = PointNet2NOCS.load_from_checkpoint(
-                find_best_checkpoint(cfg.canon_checkpoint))
-        else:
-            pointnet2_model = HRNet2NOCS.load_from_checkpoint(
-                find_best_checkpoint(cfg.canon_checkpoint))
-        pointnet2_params = dict(pointnet2_model.hparams)
-        cloth_meta = OmegaConf.load("configs/cloth_nocs_aabb.yaml")
-        cloth_nocs_aabb = np.array(cloth_meta[cfg.cloth_type], dtype=np.float32)
-        pipeline_model = ConvImplicitWNFPipeline(cfg,
-                                                 pointnet2_params=pointnet2_params,
-                                                 batch_size=batch_size,
-                                                 cloth_nocs_aabb=cloth_nocs_aabb,
-                                                 **cfg.conv_implicit_model)
-        pipeline_model.pointnet2_nocs = pointnet2_model
-        pipeline_model.batch_size = batch_size
-        model_path = find_best_checkpoint(vv['model_path'])
-
-        pipeline_state_dict = torch.load(model_path)['state_dict']
-        pipeline_model.load_state_dict(pipeline_state_dict, strict=False)
-        pipeline_model = pipeline_model.cuda()
-        pipeline_model.eval()
-        if vv['use_wandb']:
+    if plan_cfg.pos_mode == 'medor':
+        medor_model = create_medor_model(plan_cfg)
+        medor_cfg = medor_model.cfg
+        if plan_cfg.use_wandb:
             wandb.init(
                 project="Occluded cloth",
                 name=exp_name,
-                group=vv['exp_prefix']
+                group=plan_cfg.exp_prefix
             )
-            wandb.config.update(cfg, allow_val_change=True)
+            wandb.config.update(medor_cfg, allow_val_change=True)
 
-
-
-    rs_policy = RandomShootingUVPickandPlacePlanner(vv['cem_num_pick'],
-                                                    vv['pull_step'],
-                                                    vv['wait_step'],
-                                                    dynamics=vcdynamics,
+    rs_policy = RandomShootingUVPickandPlacePlanner(plan_cfg.cem_num_pick,
+                                                    plan_cfg.pull_step,
+                                                    plan_cfg.wait_step,
+                                                    dynamics=mesh_dyn,
                                                     reward_model=reward_func,
-                                                    num_worker=vv['num_worker'],
-                                                    move_distance_range=vv['move_distance_range'],
-                                                    gpu_num=vv['gpu_num'],
-                                                    delta_y_range=vv['delta_y_range'],
+                                                    num_worker=plan_cfg.num_worker,
+                                                    move_distance_range=plan_cfg.move_distance_range,
+                                                    gpu_num=plan_cfg.gpu_num,
+                                                    delta_y_range=plan_cfg.delta_y_range,
                                                     image_size=(env.camera_height, env.camera_width),
                                                     matrix_world_to_camera=matrix_world_to_camera,
-                                                    task=vv['task'],
-                                                    pick_vis_only=vv['pick_vis_only'],
+                                                    task=plan_cfg.task,
+                                                    pick_vis_only=plan_cfg.pick_vis_only,
                                                     env=env,
                                                     )
 
@@ -205,14 +275,11 @@ def run_task(vv, log_dir, exp_name):
 
     initial_states, action_trajs, configs, all_infos = [], [], [], []
     overall_cem_planning_time = []
-    mesh_time = []
+    mesh_recon_time = []
     all_normalized_performance = []
 
     seed_utils.seed_everything(seed)
-    for episode_idx in vv['test_episodes']:
-        # print(episode_idx)
-        if episode_idx > env.num_variations:
-            break
+    for episode_idx in plan_cfg.test_episodes:
         # setup environment, ensure the same initial configuration
         env.reset(config_id=episode_idx)
 
@@ -232,15 +299,9 @@ def run_task(vv, log_dir, exp_name):
         infos = []
         frames = []
 
-        gt_positions = []
-        gt_canon_particle_poses = []
-        gt_shape_positions = []
-        model_pred_particle_poses = []
-        model_canon_particle_poses = []
-        edges_all = []
-        edges_gt = []
+        gt_positions, gt_canon_positions, gt_shape_positions, model_pred_particle_poses, model_canon_positions, pred_edges, gt_edges = [], [], [], [], [], [], []
 
-        real_pick_num = 0
+        actual_pick_num = 0
         cem_planning_time = []
 
         flex_states = [env.get_state()]
@@ -252,167 +313,44 @@ def run_task(vv, log_dir, exp_name):
         # info for this trajectory
         cloth_id = config['cloth_id']
         ds_info_path = os.path.join("dataset/cloth3d",
-                                    "nocs",  vv["cloth_type"],
+                                    "nocs", plan_cfg.cloth_type,
                                     f'{cloth_id:04d}_info.h5')
         ds_data = read_h5_dict(ds_info_path)
         gt_ds_id = ds_data['downsample_id']
-        gt_ds_mesh = ds_data['mesh_edges'].T
+        gt_ds_edges = ds_data['mesh_edges'].T
         gt_face = ds_data['triangles']
-        scene_params = [0.025, -1, -1, config_id]
-        for pick_try_idx in range(vv['pick_and_place_num']):
+        for pick_try_idx in range(plan_cfg.pick_and_place_num):
 
-            # todo use  get_all_obs
-            rgbd = env.get_rgbd(show_picker=False)
-            rgb = rgbd[:, :, :3]
-            depth = rgbd[:, :, 3]
-            unflattened_depth = depth.copy()
-
-            positions = pyflex.get_positions().reshape(-1, 4)[:, :3]
-            if vv['pos_mode'] == 'medor':
-                pipeline_model.eval()
-
-                mesh_t1 = time.time()
-                input_dict = process_any_cloth(rgb,
-                                               depth,
-                                               matrix_world_to_camera,
-                                               input_type=cfg.input_type,
-                                               coords=positions,
-                                               cloth_id=cloth_id,
-                                               cloth_type=vv['cloth_type'],
-                                               real_world=False)
-                batch_input = Batch.from_data_list([input_dict],
-                                                   follow_batch=['cloth_tri', 'cloth_nocs_verts'])
-
-                batch_input = batch_input.to(device=device)
-                seed_utils.seed_everything(seed)
-                results = pipeline_model.predict_mesh(batch_input,
-                                                           voxel_size=0.025,
-                                                           finetune_cfg=finetune_cfg,
-                                                           parallel=parallel,
-                                                           env=env,
-                                                           make_gif=False,
-                                                           # get_flat_canon_pose= "canon" in vv['task'],
-                                                           get_flat_canon_pose=True,
-                                                           )[0]
-                # pickle.dump(results_list[0], open("gt_results.pkl", "wb"))
-                # read desired result and check if it is correct
-                # gt_result = pickle.load(open("gt_results.pkl", "rb"))
-                # for k in gt_result:
-                #     if k not in results:
-                #         print("key not in results_list[0]: ", k)
-                #     else:
-                #         # print("key in results_list[0]: ", k)
-                #         if isinstance(gt_result[k], np.ndarray):
-                #             if not np.allclose(gt_result[k], results[k], atol=1e-2):
-                #                 print("not equal: ", k)
-
-                # results = None
-                # min_loss = 1e10
-                # if vv['sample_mode'] == 'best_pred':
-                #     loss_name = 'loss_init'
-                # else:
-                #     loss_name = 'loss_end'
-                # for r in results_list:
-                #     if r[loss_name] < min_loss:
-                #         results = r
-                #         min_loss = r[loss_name]
-
-                # pipeline_model.eval_metrics(batch_input, results, episode_idx, pick_try_idx, log_dir=log_dir)
-                verts, edges = results['warp_field_ds'], results['mesh_edges_ds'].T
-                faces = results['faces_ds']
-                canon_verts = results['flat_verts_ds']
-                dense_verts = results['warp_field']
-
-                if cfg.finetune:  # 'opt_warp_field_ds' in results:
-                    print('use finetuned ')
-                    verts = results['opt_warp_field_ds']
-                    dense_verts = results['opt_warp_field']
-                verts_vis, _ = get_visibility_by_rendering(torch.tensor(dense_verts).cuda(),
-                                                           torch.tensor(results['faces']).cuda().long())
-                verts_vis = verts_vis[results['downsample_id']]
-
-                print("creating predicted mesh takes ", time.time() - mesh_t1)
-                mesh_time.append(time.time() - mesh_t1)
-            elif vv['pos_mode'] == 'gt':
-                # Use ground-truth downsampled mesh for rollout
-                verts, edges, faces = positions[gt_ds_id], gt_ds_mesh, gt_face
-                verts_vis = get_visible(camera_pos, camera_angle, positions, depth).squeeze()
-                canon_verts = env.canon_poses.copy()
-
-                verts_vis = verts_vis[gt_ds_id]
-                canon_verts = [x[[gt_ds_id]] for x in canon_verts]
+            # compute cloth mesh for planning
+            data = compute_cloth_mesh_for_planning(plan_cfg, medor_model, matrix_world_to_camera,
+                                                          finetune_cfg, env,
+                                                          gt_ds_id, gt_ds_edges, gt_face)
+            data["vel_his"] = np.zeros((data["verts"].shape[0], dyn_args.n_his * 3), dtype=np.float32)
+            pred_edges.append(data["mesh_edges"])
+            gt_edges.append(gt_ds_edges)
 
 
-            print('Predicted mesh contains {} nodes  {} edges'.format(verts.shape[0],
-                                                                      edges.shape[1]))
-
-            edges_all.append(edges)
-            edges_gt.append(gt_ds_mesh)
-
-            sample_pos = verts
-
-            vel_history = np.zeros((verts.shape[0], dyn_args.n_his * 3), dtype=np.float32)
-
-            picker_position = env.action_tool._get_pos()[0]
-            picked_points = [-1, -1]
-            # data = [positions, vel_history, picker_position, env.action_space.sample(), picked_points, scene_params, observable_particle_indices]
-            data = {
-                'verts': verts,
-                'verts_vis': verts_vis,
-                'vel_his': vel_history,
-                'picker_position': picker_position,
-                'action': env.action_space.sample(),
-                'picked_points': picked_points,
-                'mesh_edges': edges,  # 2 x n
-                'model_face': faces,
-                'scene_params': scene_params,
-                'mapped_particle_indices': None,
-                'ds_id': gt_ds_id,
-                'model_canon_pos': canon_verts,
-                'init_pos': env.init_pos
-            }
-            # pdb.set_trace()
-            # for k,v in data.items():
-            #     if isinstance(v, list):
-            #         print(k, len(v))
-            #     else:
-            #         print(k, v.shape)
-            # pdb.set_trace()
+            # planning using mesh_dyn to get action sequence
             beg = time.time()
-            print(verts.shape)
-            planning_results = rs_policy.get_action(data,
-                                                    vcdynamics.args,
-                                                    gpu_id=0,
-                                                    depth=unflattened_depth,
-                                                    m_name=vv['m_name'],
+            action_sequence, model_pred_particle_pos, canon_tgt, ret_info = rs_policy.get_action(data,
+                                                    mesh_dyn.args,
+                                                    m_name=plan_cfg.m_name,
                                                     )
-            action_sequence = planning_results['action_seq']
-            model_pred_particle_pos = planning_results['model_predict_particle_positions']
-            model_canon_tgt = planning_results['model_canon_tgt']
 
-            cem_info = planning_results['ret_info']
+            cem_info = ret_info
             cur_plan_time = time.time() - beg
             cem_planning_time.append(cur_plan_time)
-            overall_cem_planning_time.append(cur_plan_time)
-            print(
-                "config {} pick idx {} cem get action cost time: {}".format(config_id, pick_try_idx,
-                                                                            cur_plan_time),
-                flush=True)
+            print("config {} pick idx {} cem get action cost time: {}".format(config_id, pick_try_idx, cur_plan_time))
 
             # first set picker to target pos
-            start_pos = cem_info['start_pos']
-            after_pos = cem_info['after_pos']
-            start_poses.append(start_pos)
-            after_poses.append(after_pos)
-
-            model_pred_particle_poses.append(model_pred_particle_pos)
-            model_canon_particle_poses.append(model_canon_tgt)
-            # predicted_edges_all.append(predicted_edges)
-
-            # set to pick location directly
+            start_pos, after_pos = cem_info['start_pos'], cem_info['after_pos']
+            start_poses.append(start_pos), after_poses.append(after_pos)
             set_picker_pos(start_pos)
 
-            if vv.get('pred_time_interval', 1) >= 2 and vv.get('slow_move', False):
+            model_pred_particle_poses.append(model_pred_particle_pos)
+            model_canon_positions.append(canon_tgt)
+
+            if plan_cfg.pred_time_interval >= 2:
                 action_sequence = np.zeros((50 + 30, 8))
                 action_sequence[:50, 3] = 1  # first 50 steps pick the cloth
                 action_sequence[:50, :3] = (after_pos - start_pos) / 50  # delta move
@@ -420,14 +358,11 @@ def run_task(vv, log_dir, exp_name):
             gt_positions.append(np.zeros((len(action_sequence), len(gt_ds_id), 3)))
             gt_shape_positions.append(np.zeros((len(action_sequence), 2, 3)))
 
-            for t_idx, ac in enumerate(action_sequence[:-1]):
-
-                picker_position = env.action_tool._get_pos()[0]
+            for t_idx, ac in enumerate(action_sequence):
                 obs, reward, done, info = env.step(ac, record_continuous_video=True, img_size=360)
 
-                imgs = info['flex_env_recorded_frames']
                 info['planning_time'] = cur_plan_time
-                frames.extend(imgs)
+                frames.extend(info['flex_env_recorded_frames'])
                 info.pop("flex_env_recorded_frames")
 
                 ret += reward
@@ -438,14 +373,14 @@ def run_task(vv, log_dir, exp_name):
                 for k in range(2):
                     gt_shape_positions[pick_try_idx][t_idx][k] = shape_pos[k][:3]
 
-            real_pick_num += 1
+            actual_pick_num += 1
 
-            if vv['task'] == 'canon':
-                gt_canon_particle_poses.append(info['canon_tgt'][gt_ds_id])
-            elif vv['task'] == 'canon_rigid':
-                gt_canon_particle_poses.append(info['canon_rigid_tgt'][gt_ds_id])
+            if plan_cfg.task == 'canon':
+                gt_canon_positions.append(info['canon_tgt'][gt_ds_id])
+            elif plan_cfg.task == 'canon_rigid':
+                gt_canon_positions.append(info['canon_rigid_tgt'][gt_ds_id])
             else:
-                gt_canon_particle_poses.append(None)
+                gt_canon_positions.append(None)
 
             if 'canon_tgt' in info:
                 info.pop('canon_tgt')
@@ -458,62 +393,59 @@ def run_task(vv, log_dir, exp_name):
             metric_map = {'flatten': 'normalized_coverage_improvement',
                           'canon': 'normalized_canon_improvement',
                           'canon_rigid': 'normalized_canon_rigid_improvement'}
-            metric = metric_map[vv['task']]
+            metric = metric_map[plan_cfg.task]
             print("Iter {} {} is {}".format(pick_try_idx, metric, info[metric]))
-            assert info[metric]> 0.2 # just for testing
-            print("successssssssssssssssssssss")
-            exit()
             if info[metric] > 0.95:
                 break
-
+        
+        overall_cem_planning_time.extend(cem_planning_time)
         scores_gt = [info[metric] for info in infos]
 
         # dump the data for drawing the planning actions & draw the planning actions
         draw_data = [episode_idx, flex_states, start_poses, after_poses, obses, config]
         # draw the planned actions
-        draw_planned_actions(episode_idx, obses, start_poses, after_poses, matrix_world_to_camera,
-                             log_dir)
+        draw_planned_actions(episode_idx, obses, start_poses, after_poses, matrix_world_to_camera, log_dir)
         with open(osp.join(log_dir, '{}_draw_planned_traj.pkl'.format(episode_idx)), 'wb') as f:
             pickle.dump(draw_data, f)
-        interval = 1 if vv['pick_and_place_num'] < 100 else 10
-        for pick_try_idx in range(0, real_pick_num, interval):
-            if vv['pred_time_interval'] >= 2 and vv['slow_move']:
-                # in this case the real rollout is longer, have to subsample it
-                factor = 80 / len(model_pred_particle_poses[pick_try_idx])
-                subsampled_gt_pos = []
-                subsampled_shape_pos = []
-                max_idx = 80
-                for t in range(len(model_pred_particle_poses[pick_try_idx])):
-                    subsampled_gt_pos.append(
-                        gt_positions[pick_try_idx][min(int(t * factor), max_idx - 1)])
-                    subsampled_shape_pos.append(
-                        gt_shape_positions[pick_try_idx][min(max_idx - 1, int(t * factor))])
-            else:
-                subsampled_gt_pos = gt_positions[pick_try_idx]
-                subsampled_shape_pos = gt_shape_positions[pick_try_idx]
 
-            kwargs = {
+        for pick_try_idx in range(actual_pick_num):
+            # Subsample ground truth trajectory to match model prediction length
+            model_pred_len = len(model_pred_particle_poses[pick_try_idx])
+            max_idx = 80
+            factor = max_idx / model_pred_len
+            
+            subsampled_gt_pos = [
+                gt_positions[pick_try_idx][min(int(t * factor), max_idx - 1)]
+                for t in range(model_pred_len)
+            ]
+            subsampled_shape_pos = [
+                gt_shape_positions[pick_try_idx][min(int(t * factor), max_idx - 1)]
+                for t in range(model_pred_len)
+            ]
+
+            # Prepare visualization arguments
+            vis_kwargs = {
                 'particle_pos_model': model_pred_particle_poses[pick_try_idx],
                 'particle_pos_gt': subsampled_gt_pos,
                 'shape_pos': subsampled_shape_pos,
                 'sample_idx': range(model_pred_particle_poses[pick_try_idx].shape[1]),
-                'edges_model': edges_all[pick_try_idx],
-                'edges_gt': edges_gt[pick_try_idx],
-                'goal_model': model_canon_particle_poses[pick_try_idx],
-                'goal_gt': gt_canon_particle_poses[pick_try_idx],
+                'edges_model': pred_edges[pick_try_idx],
+                'edges_gt': gt_edges[pick_try_idx], 
+                'goal_model': model_canon_positions[pick_try_idx],
+                'goal_gt': gt_canon_positions[pick_try_idx],
                 'score': scores_gt[pick_try_idx],
                 'gt_ds_id': gt_ds_id,
                 'logdir': log_dir,
-                "episode_idx": episode_idx,
+                'episode_idx': episode_idx,
                 'pick_try_idx': pick_try_idx,
                 'draw_goal_flow': True
             }
-            # Doing costly IO asynchronously
-            io_pool.apply_async(async_vis_io, kwds=kwargs)
+
+            # Asynchronously generate visualization
+            io_pool.apply_async(async_vis_io, kwds=vis_kwargs)
 
         normalized_performance_traj = [info['normalized_coverage'] for info in infos]
-        with open(osp.join(log_dir, 'normalized_performance_traj_{}.pkl'.format(episode_idx)),
-                  'wb') as f:
+        with open(osp.join(log_dir, 'normalized_performance_traj_{}.pkl'.format(episode_idx)), 'wb') as f:
             pickle.dump(normalized_performance_traj, f)
 
         all_normalized_performance.append(normalized_performance_traj)
@@ -529,7 +461,7 @@ def run_task(vv, log_dir, exp_name):
         logger.dump_tabular()
 
         cem_make_gif([frames], logger.get_dir(),
-                     vv['env_name'] + '{}.gif'.format(episode_idx))
+                     plan_cfg.env_name + '{}.gif'.format(episode_idx))
 
         action_trajs.append(action_traj)
         all_infos.append(infos)
@@ -537,8 +469,8 @@ def run_task(vv, log_dir, exp_name):
     io_pool.close()
     io_pool.join()
     print('\n ---------------------------------------------')
-    print("cem plan one action average time: ", np.mean(overall_cem_planning_time), flush=True)
-    print('mesh prediction average time', np.mean(mesh_time))
+    print("cem plan one action average time: ", np.mean(overall_cem_planning_time))
+    print('mesh prediction average time', np.mean(mesh_recon_time))
     # print('Avg canoncal pose error', np.mean(chamfer_canon_to_gts))
     with open(osp.join(log_dir, 'all_normalized_performance.pkl'), 'wb') as f:
         pickle.dump(all_normalized_performance, f)

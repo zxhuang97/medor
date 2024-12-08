@@ -78,7 +78,6 @@ class RandomShootingUVPickandPlacePlanner:
                    dyn_args,
                    gpu_id=0,
                    robot_exp=False,
-                   depth=None,
                    m_name='vsbl',
                    ):
         """
@@ -100,6 +99,7 @@ class RandomShootingUVPickandPlacePlanner:
 
         verts = data["verts"]
         verts_vis = data["verts_vis"]
+        depth = data["depth"]
         bb_margin = 30
 
         us, vs = self.project_3d(verts)
@@ -168,7 +168,7 @@ class RandomShootingUVPickandPlacePlanner:
         ret_info['start_pos'] = start_poses[highest_return_idx]
         ret_info['after_pos'] = after_poses[highest_return_idx]
         model_predict_particle_positions = results[highest_return_idx]['model_positions']
-        model_predict_shape_positions = results[highest_return_idx]['shape_positions']
+        # model_predict_shape_positions = results[highest_return_idx]['shape_positions']
         canon_tgt = results[highest_return_idx]['canon_tgt']
         if dyn_args.reward_model:
             ret_info['gt_rewards'] = np.array([info['gt_rewards'] for info in infos])
@@ -176,11 +176,11 @@ class RandomShootingUVPickandPlacePlanner:
         planning_results = {
             'action_seq': action_seq,
             'model_predict_particle_positions': model_predict_particle_positions,
-            'model_predict_shape_positions': model_predict_shape_positions,
+            # 'model_predict_shape_positions': model_predict_shape_positions,
             'model_canon_tgt': canon_tgt,
             'ret_info': ret_info
         }
-        return planning_results
+        return action_seq, model_predict_particle_positions, canon_tgt, ret_info
 
     def close_pool(self):
         self.pool.close()
