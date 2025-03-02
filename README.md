@@ -35,7 +35,19 @@ export PATH=/usr/local/cuda/bin/:$PATH
 LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 . ./compile_1.0.sh
 ```
-# Mesh Reconstruction
+# Pretrained models
+Please download the pretrained models and put them under `data/release`.
+### Mesh reconstruction model
+We provide the pretrained models for Tshirt, Trousers, Skirt, and Dress:
+- [Tshirt](https://drive.google.com/file/d/1ISpN-uSeIoCTdtV0M_NAXuOel0zxDzbd/view?usp=sharing)
+- [Trousers](https://drive.google.com/file/d/1-QCSUHySClJncu4JaQ6YgCSYJoFlIsaQ/view?usp=sharing)
+- [Skirt](https://drive.google.com/file/d/1U1SsSj-15YzeH8FES8QeWS8GIbJ_nOAA/view?usp=drive_link)
+- [Dress](https://drive.google.com/file/d/1jRP6K72EY3j9BghjG4wm77JYJoxA6Smj/view?usp=drive_link)
+
+### Mesh dynamics model
+We trained a mesh dynamics model on Trousers and found it generalizes well to other categories. We used this model for planning in all experiments.
+- [Trousers](https://drive.google.com/file/d/1-QCSUHySClJncu4JaQ6YgCSYJoFlIsaQ/view?usp=sharing)
+
 ## Dataset
 Currently, we only provide dataset for Tshirt. For training and testing, you need to full dataset. 
 If you only want to run the demo, you can download the test set alone.

@@ -10,6 +10,7 @@ import numpy as np
 import pyflex
 import wandb
 from torch_geometric.data import Batch
+import argparse
 import pdb
 import torch
 import torchvision
@@ -193,7 +194,6 @@ def compute_cloth_mesh_for_planning(vv, medor_model, matrix_world_to_camera, fin
         'verts': verts,
         'verts_vis': verts_vis,
         'picker_position': picker_position,
-        # 'action': env.action_space.sample(),
         'picked_points': picked_points,
         'mesh_edges': edges,
         'model_face': faces,
@@ -271,8 +271,11 @@ def run_task(plan_cfg, log_dir, exp_name):
                                                     )
 
     print("cem policy built done")
-    parallel = None
-
+    metric_map = {'flatten': 'normalized_coverage_improvement',
+                    'canon': 'normalized_canon_improvement',
+                    'canon_rigid': 'normalized_canon_rigid_improvement'}
+    metric_name = metric_map[plan_cfg.task]
+    # K x dict , K x N x 16, K , K x N x 80 
     initial_states, action_trajs, configs, all_infos = [], [], [], []
     overall_cem_planning_time = []
     mesh_recon_time = []
@@ -285,36 +288,27 @@ def run_task(plan_cfg, log_dir, exp_name):
 
         # move one picker below the ground, set another picker randomly to a picked point / above the cloth
         prepare_policy(env)
-
         config = env.get_current_config()
-        config_id = env.current_config_id
         # prepare environment and do downsample
-
-        initial_state = env.get_state()
-        initial_states.append(initial_state)
+        initial_states.append(env.get_state())
         configs.append(config)
 
-        ret = 0
         action_traj = []
         infos = []
         frames = []
 
-        gt_positions, gt_canon_positions, gt_shape_positions, model_pred_particle_poses, model_canon_positions, pred_edges, gt_edges = [], [], [], [], [], [], []
-
+        gt_positions, gt_canon_positions, gt_shape_positions, model_pred_particle_poses, model_canon_positions= [], [], [], [], []
+        pred_edges, gt_edges = [], []
         actual_pick_num = 0
         cem_planning_time = []
 
         flex_states = [env.get_state()]
-        start_poses = []
-        after_poses = []
+        start_poses, after_poses = [], []
         obs = env.get_image(env.camera_width, env.camera_height)
         obses = [obs]
 
         # info for this trajectory
-        cloth_id = config['cloth_id']
-        ds_info_path = os.path.join("dataset/cloth3d",
-                                    "nocs", plan_cfg.cloth_type,
-                                    f'{cloth_id:04d}_info.h5')
+        ds_info_path = os.path.join("dataset/cloth3d/nocs", plan_cfg.cloth_type, f'{config["cloth_id"]:04d}_info.h5')
         ds_data = read_h5_dict(ds_info_path)
         gt_ds_id = ds_data['downsample_id']
         gt_ds_edges = ds_data['mesh_edges'].T
@@ -322,8 +316,7 @@ def run_task(plan_cfg, log_dir, exp_name):
         for pick_try_idx in range(plan_cfg.pick_and_place_num):
 
             # compute cloth mesh for planning
-            data = compute_cloth_mesh_for_planning(plan_cfg, medor_model, matrix_world_to_camera,
-                                                          finetune_cfg, env,
+            data = compute_cloth_mesh_for_planning(plan_cfg, medor_model, matrix_world_to_camera, finetune_cfg, env,
                                                           gt_ds_id, gt_ds_edges, gt_face)
             data["vel_his"] = np.zeros((data["verts"].shape[0], dyn_args.n_his * 3), dtype=np.float32)
             pred_edges.append(data["mesh_edges"])
@@ -332,74 +325,63 @@ def run_task(plan_cfg, log_dir, exp_name):
 
             # planning using mesh_dyn to get action sequence
             beg = time.time()
-            action_sequence, model_pred_particle_pos, canon_tgt, ret_info = rs_policy.get_action(data,
-                                                    mesh_dyn.args,
-                                                    m_name=plan_cfg.m_name,
-                                                    )
+            action_seq, model_pred_positions, canon_tgt, cem_info = rs_policy.get_action(data, mesh_dyn.args, m_name=plan_cfg.m_name)
 
-            cem_info = ret_info
             cur_plan_time = time.time() - beg
             cem_planning_time.append(cur_plan_time)
-            print("config {} pick idx {} cem get action cost time: {}".format(config_id, pick_try_idx, cur_plan_time))
+            print("Episode {} pick idx {} cem get action cost time: {}".format(episode_idx, pick_try_idx, cur_plan_time))
 
             # first set picker to target pos
             start_pos, after_pos = cem_info['start_pos'], cem_info['after_pos']
             start_poses.append(start_pos), after_poses.append(after_pos)
             set_picker_pos(start_pos)
 
-            model_pred_particle_poses.append(model_pred_particle_pos)
+            model_pred_particle_poses.append(model_pred_positions)
             model_canon_positions.append(canon_tgt)
 
             if plan_cfg.pred_time_interval >= 2:
-                action_sequence = np.zeros((50 + 30, 8))
-                action_sequence[:50, 3] = 1  # first 50 steps pick the cloth
-                action_sequence[:50, :3] = (after_pos - start_pos) / 50  # delta move
+                action_seq = np.zeros((50 + 30, 8))
+                action_seq[:50, 3] = 1  # first 50 steps pick the cloth
+                action_seq[:50, :3] = (after_pos - start_pos) / 50  # delta move
 
-            gt_positions.append(np.zeros((len(action_sequence), len(gt_ds_id), 3)))
-            gt_shape_positions.append(np.zeros((len(action_sequence), 2, 3)))
+            gt_positions.append(np.zeros((len(action_seq), len(gt_ds_id), 3)))
+            gt_shape_positions.append(np.zeros((len(action_seq), 2, 3)))
 
-            for t_idx, ac in enumerate(action_sequence):
+            for t_idx, ac in enumerate(action_seq):
                 obs, reward, done, info = env.step(ac, record_continuous_video=True, img_size=360)
 
                 info['planning_time'] = cur_plan_time
                 frames.extend(info['flex_env_recorded_frames'])
-                info.pop("flex_env_recorded_frames")
-
-                ret += reward
                 action_traj.append(ac)
-
                 gt_positions[pick_try_idx][t_idx] = pyflex.get_positions().reshape(-1, 4)[gt_ds_id, :3]
                 shape_pos = pyflex.get_shape_states().reshape(-1, 14)
                 for k in range(2):
                     gt_shape_positions[pick_try_idx][t_idx][k] = shape_pos[k][:3]
 
             actual_pick_num += 1
-
+            info.pop("flex_env_recorded_frames")
+            info.pop('canon_tgt', None)
+            info.pop('canon_rigid_tgt', None)
             if plan_cfg.task == 'canon':
-                gt_canon_positions.append(info['canon_tgt'][gt_ds_id])
+                gt_canon_positions.append(canon_tgt[gt_ds_id])
             elif plan_cfg.task == 'canon_rigid':
                 gt_canon_positions.append(info['canon_rigid_tgt'][gt_ds_id])
             else:
                 gt_canon_positions.append(None)
 
-            if 'canon_tgt' in info:
-                info.pop('canon_tgt')
-                info.pop('canon_rigid_tgt')
+
             infos.append(info)
             obs = env.get_image(env.camera_width, env.camera_height)
             obses.append(obs)
             flex_states.append(env.get_state())
 
-            metric_map = {'flatten': 'normalized_coverage_improvement',
-                          'canon': 'normalized_canon_improvement',
-                          'canon_rigid': 'normalized_canon_rigid_improvement'}
-            metric = metric_map[plan_cfg.task]
-            print("Iter {} {} is {}".format(pick_try_idx, metric, info[metric]))
-            if info[metric] > 0.95:
+
+            print("Iter {} {} is {}".format(pick_try_idx, metric_name, info[metric_name]))
+            if info[metric_name] > 0.95:
                 break
         
         overall_cem_planning_time.extend(cem_planning_time)
-        scores_gt = [info[metric] for info in infos]
+        normalized_performance_traj = [info[metric_name] for info in infos]
 
         # dump the data for drawing the planning actions & draw the planning actions
         draw_data = [episode_idx, flex_states, start_poses, after_poses, obses, config]
@@ -433,7 +415,7 @@ def run_task(plan_cfg, log_dir, exp_name):
                 'edges_gt': gt_edges[pick_try_idx], 
                 'goal_model': model_canon_positions[pick_try_idx],
                 'goal_gt': gt_canon_positions[pick_try_idx],
-                'score': scores_gt[pick_try_idx],
+                'score': normalized_performance_traj[pick_try_idx],
                 'gt_ds_id': gt_ds_id,
                 'logdir': log_dir,
                 'episode_idx': episode_idx,
@@ -444,12 +426,13 @@ def run_task(plan_cfg, log_dir, exp_name):
             # Asynchronously generate visualization
             io_pool.apply_async(async_vis_io, kwds=vis_kwargs)
 
-        normalized_performance_traj = [info['normalized_coverage'] for info in infos]
         with open(osp.join(log_dir, 'normalized_performance_traj_{}.pkl'.format(episode_idx)), 'wb') as f:
             pickle.dump(normalized_performance_traj, f)
 
         all_normalized_performance.append(normalized_performance_traj)
-
+        final_perf = [x[-1] for x in all_normalized_performance]
+        print('Avg final performance', np.mean(final_perf))
+        print('Median final performance', np.median(final_perf))
         transformed_info = transform_info([infos])
         with open(osp.join(log_dir, 'transformed_info_traj_{}.pkl'.format(episode_idx)), 'wb') as f:
             pickle.dump(transformed_info, f)
@@ -471,7 +454,10 @@ def run_task(plan_cfg, log_dir, exp_name):
     print('\n ---------------------------------------------')
     print("cem plan one action average time: ", np.mean(overall_cem_planning_time))
     print('mesh prediction average time', np.mean(mesh_recon_time))
-    # print('Avg canoncal pose error', np.mean(chamfer_canon_to_gts))
+    final_perf = [x[-1] for x in all_normalized_performance]
+    print('Avg final performance', np.mean(final_perf))
+    print('Median final performance', np.median(final_perf))
+    
     with open(osp.join(log_dir, 'all_normalized_performance.pkl'), 'wb') as f:
         pickle.dump(all_normalized_performance, f)
 
@@ -486,7 +472,19 @@ def run_task(plan_cfg, log_dir, exp_name):
 
 
 if __name__ == "__main__":
-    vv = OmegaConf.load("configs/plan.yaml")
-    log_dir = "data/release_plan_test/1206"
-    exp_name = "1206"
-    run_task(vv, log_dir, exp_name)
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument('--cloth_type', type=str, default='Trousers')
+    arg_parser.add_argument('--exp_name', type=str, default='')
+    args = arg_parser.parse_args()
+    plan_cfg = OmegaConf.load("configs/plan.yaml")
+    plan_cfg.cloth_type = args.cloth_type
+    if args.exp_name == '':
+        exp_name = args.cloth_type
+    else:
+        exp_name = args.exp_name
+    log_dir = os.path.join("data/plan", exp_name)
+
+    plan_cfg.mc_thres = {'Trousers': 0.1, 'Skirt': 0.05, 'Tshirt': 0.1, 'Dress': 0.1, 'Jumpsuit': 0.1}[plan_cfg.cloth_type]
+    plan_cfg.cached_states_path = f"{plan_cfg.cloth_type}_hard_v4.pkl"
+    plan_cfg.test_episodes = np.arange(40).tolist()
+    run_task(plan_cfg, log_dir, exp_name)

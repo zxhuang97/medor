@@ -260,7 +260,7 @@ def main(mode, debug, dry):
         all_epi = [_ + start for _ in range(num)]
         return [all_epi[i:i + s] for i in range(0, len(all_epi), s)]
 
-    test_episodes = devide_epi(40, 4, start=0)
+    test_episodes = devide_epi(40, 1, start=0)
 
     # test_episodes = [[i for i in range(31, 40)]]
     def get_num_worker(pos_mode):
