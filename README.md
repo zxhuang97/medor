@@ -1,12 +1,12 @@
 # MEDOR
-
+Official codebase for Mesh-based dynamics with occlusion reasoning for cloth manipulation
 
 # Installation
+## Clone the repo
 ```
 git clone --recursive git@github.com:zxhuang97/medor.git
 cd medor
 ```
-
 ## Configure python environment
 `Mamba` is highly recommended for configuring the python environment. It's a drop-in replacement for `conda` but much faster. 
 ```
@@ -61,6 +61,7 @@ If you only want to run the demo, you can download the test set alone.
 
 # Mesh Reconstruction Demo
 Download the pretrained model and put it under `data/release`.
+
 ```angular2html
 data
 └── release
@@ -109,4 +110,3 @@ python garmentnets/train_pipeline.py \
 --cloth_type Tshirt \
 --canon_checkpoint data/release/Tshirt_release/tshirt_canon
 ```
-
