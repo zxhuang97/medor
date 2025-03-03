@@ -2,6 +2,11 @@
 
 
 # Installation
+```
+git clone --recursive git@github.com:zxhuang97/medor.git
+cd medor
+```
+
 ## Configure python environment
 `Mamba` is highly recommended for configuring the python environment. It's a drop-in replacement for `conda` but much faster. 
 ```
