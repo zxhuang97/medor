@@ -35,7 +35,7 @@ export PATH=/usr/local/cuda/bin/:$PATH
 LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 . ./compile_1.0.sh
 ```
-# Pretrained models
+## Pretrained models
 Please download the pretrained models and put them under `data/release`.
 ### Mesh reconstruction model
 We provide the pretrained models for Tshirt, Trousers, Skirt, and Dress:
@@ -54,12 +54,12 @@ If you only want to run the demo, you can download the test set alone.
 - [Full dataset](https://drive.google.com/file/d/1JrC2vHrdxXvfjgcmn2tz1eT81U2noTlP/view?usp=sharing)
 - [Test set](https://drive.google.com/file/d/1klTUl5xaja3izQ5GoLjDPn88dwbkrERo/view?usp=sharing)
 
-## Demo
+# Mesh Reconstruction Demo
 Download the pretrained model and put it under `data/release`.
 ```angular2html
 data
 └── release
-    └── tshirt_release
+    └── medor_Tshirt
 dataset
 └── Tshirt_dataset_release2
 ```
@@ -69,11 +69,23 @@ dataset
 ```
 . ./prepare_release.sh
 python garmentnets/eval_pipeline.py \
---model_path data/release/tshirt_release/pipeline/ \
+--model_path data/release/medor_Tshirt/pipeline/ \
 --tt_finetune --cloth_type Tshirt --max_test_num 5 \
 --exp_name release_demo 
 ```
 The results can be found in `data/test/release_demo`.
+
+# Planning with Mesh Dynamics Model
+Download the simulator [cached states](https://drive.google.com/file/d/1_XIz0LRWc8brVolXeLoVaS6vfttzJV4i/view?usp=drive_link) and put the pickle files under `softgym_medor/softgym/cached_initial_states`.
+Download pre-processed [cloth3d dataset](https://drive.google.com/drive/folders/13Z19FHutzTGcyIMv3BQgJDioDrTTHuty?usp=drive_link) and put it under `dataset/cloth3d`. The entire dataset is around ~30 GB. You may only download the categories you are interested in.
+
+Make sure that the checkpoints of pretrained reconstruction model and dynamics model are downloaded and put under `data/release`.
+
+```
+python plan_gnn.py --cloth_type Tshirt --exp_name medor_Tshirt --num_trials 40
+```
+Results can be found in `data/plan/medor_Tshirt`.
+
 # Training
 Train the canonicalization Networks
 ```
@@ -93,7 +105,3 @@ python garmentnets/train_pipeline.py \
 --canon_checkpoint data/release/Tshirt_release/tshirt_canon
 ```
 
-# Mesh GNN
-TODO
-# Planning
-TODO

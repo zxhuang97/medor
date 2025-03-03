@@ -167,13 +167,13 @@ def curate_cloth(args):
     # print(cloth_id)
     # nocs, wnf = gdloader.get_sample(cloth_id.item())
     # ["downsample_id", "triangles", "mesh_edges", "nocs", "wnf"]
-    nocs_data = read_h5_dict(f"{CLOTH_3D_PATH}/nocs/{ctype}/{cloth_id:04d}_info.h5",
+    nocs_data = read_h5_dict(f"{CLOTH_3D_PATH}/{ctype}/nocs/{cloth_id:04d}_info.h5",
                              data_names=['nocs', 'wnf'])
 
     nocs = nocs_data['nocs']
     wnf = nocs_data['wnf']
 
-    _, F = readOBJ(f"{CLOTH_3D_PATH}/mesh/{ctype}/{cloth_id:04d}.obj")[:2]
+    _, F = readOBJ(f"{CLOTH_3D_PATH}/{ctype}/mesh/{cloth_id:04d}.obj")[:2]
     F = quads2tris(F)
     # pdb.set_trace()
     pc_nocs = get_barycentric_cloth_pc(pc, coords, F, nocs)

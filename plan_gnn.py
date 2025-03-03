@@ -308,7 +308,7 @@ def run_task(plan_cfg, log_dir, exp_name):
         obses = [obs]
 
         # info for this trajectory
-        ds_info_path = os.path.join("dataset/cloth3d/nocs", plan_cfg.cloth_type, f'{config["cloth_id"]:04d}_info.h5')
+        ds_info_path = os.path.join("dataset/cloth3d",  plan_cfg.cloth_type, f'nocs/{config["cloth_id"]:04d}_info.h5')
         ds_data = read_h5_dict(ds_info_path)
         gt_ds_id = ds_data['downsample_id']
         gt_ds_edges = ds_data['mesh_edges'].T
@@ -475,6 +475,7 @@ if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--cloth_type', type=str, default='Trousers')
     arg_parser.add_argument('--exp_name', type=str, default='')
+    arg_parser.add_argument("--num_trials", type=int, default=40)
     args = arg_parser.parse_args()
     plan_cfg = OmegaConf.load("configs/plan.yaml")
     plan_cfg.cloth_type = args.cloth_type
@@ -486,5 +487,5 @@ if __name__ == "__main__":
 
     plan_cfg.mc_thres = {'Trousers': 0.1, 'Skirt': 0.05, 'Tshirt': 0.1, 'Dress': 0.1, 'Jumpsuit': 0.1}[plan_cfg.cloth_type]
     plan_cfg.cached_states_path = f"{plan_cfg.cloth_type}_hard_v4.pkl"
-    plan_cfg.test_episodes = np.arange(40).tolist()
+    plan_cfg.test_episodes = np.arange(args.num_trials).tolist()
     run_task(plan_cfg, log_dir, exp_name)
