@@ -12,6 +12,11 @@ cd medor
 ```
 mamba env create -f release.yml
 ```
+
+After softgym is installed, you may activate the environment by
+```
+. ./prepare_release.sh
+```
 ## Install Softgym
 Step 1: Install [docker](https://docs.docker.com/engine/install/ubuntu/) and [nvidia-container](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Then pull the docker image by
 ```
