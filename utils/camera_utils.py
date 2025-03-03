@@ -316,15 +316,15 @@ def get_world_coor_from_image(u, v, matrix_world_to_camera, all_depth, depth=Non
     return world_coord[:3]
 
 
-def get_target_pos(pos, u, v, image_size, matrix_world_to_camera, depth, model_vis=None,
-                   sample_vis=True):
+def get_target_pos(pos, u, v, image_size, matrix_world_to_camera, depth, verts_vis=None,
+                   pick_vis_only=True):
     coor = get_world_coor_from_image(u, v, matrix_world_to_camera, depth)
     dists = cdist(coor[None], pos)[0]
     sorted_idx = np.argsort(dists)
     idx = np.argmin(dists)
-    if sample_vis and model_vis is not None:
+    if pick_vis_only and verts_vis is not None:
         for i in sorted_idx:
-            if model_vis[i]:
+            if verts_vis[i]:
                 idx = i
                 break
     return pos[idx] + np.array([0, 0.01, 0])
@@ -345,7 +345,7 @@ def get_observable_particle_index2(world_coords, particle_pos):
     return vis_n
 
 
-def get_visible(camera_params, coords, depth):
+def get_visible(matrix_world_to_camera, coords, depth):
     """Get knots that are visible in the depth image.
 
     Returns
@@ -361,7 +361,6 @@ def get_visible(camera_params, coords, depth):
     depth_z = depth[depth_uv[:, 0], depth_uv[:, 1]]
     h, w = depth.shape
     K = intrinsic_from_fov(h, w, 45)
-    matrix_world_to_camera = get_matrix_world_to_camera(camera_params)
     world_coords = uv_to_world_pos(depth_uv[:, 0], depth_uv[:, 1], depth_z, K, matrix_world_to_camera)
     # vis_n = get_observable_particle_index(world_coords, coords)
     vis_n = get_observable_particle_index2(world_coords, coords)

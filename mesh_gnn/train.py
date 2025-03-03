@@ -24,7 +24,6 @@ def get_default_args():
     # parser.add_argument('--partial_observable', type=bool, default=True, help="Whether only the partial point cloud can be observed")
     parser.add_argument('--particle_radius', type=float, default=0.00625, help='Particle radius for the cloth')
     parser.add_argument('--cloth3d_dir', type=str, default='dataset/cloth3d', help='Path to cloth3D dataset')
-    # parser.add_argument('--cloth3d_path', type=str, default='dataset/cloth3d/train', help='Path to cloth3D dataset')
     parser.add_argument('--cloth3d_type', type=str, default='Trousers',
                         help='Type of clothes: [Trousers, Dress, Jumpsuit, Skirt, Tshirt]')
     # Dataset

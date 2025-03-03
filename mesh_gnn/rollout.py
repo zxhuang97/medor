@@ -115,7 +115,6 @@ def rollout_worker(inputs):
         velocity_his = model_input_data['vel_his']
         picker_pos = model_input_data['picker_position']
         picked_particles = model_input_data['picked_points']
-        scene_params = model_input_data['scene_params']
         observable_particle_index = model_input_data['mapped_particle_indices']
         rest_dist = model_input_data.get('rest_dist', None)
         mesh_edges = model_input_data.get('mesh_edges', None)
@@ -126,8 +125,6 @@ def rollout_worker(inputs):
         model_positions = np.zeros((planning_horizon, len(particle_pos), 3))
         shape_positions = np.zeros((planning_horizon, 2, 3))
         initial_particle_pos = particle_pos.copy()
-        pred_rewards = np.zeros(planning_horizon)
-        gt_pos_rewards = np.zeros(planning_horizon)
         # print('vcd_edge is working ', vcd_edge)
         # get the mesh edge prediction using the mesh edge model
         if (vcd_edge is not None and mesh_edges is None) or m_name == 'vsbl':
@@ -136,8 +133,6 @@ def rollout_worker(inputs):
             mesh_edges = vcd_edge.infer_mesh_edges(model_input_data)
 
         # for ablation that uses first-time step collision edges as the mesh edges
-
-        ret = 0
         final_ret = 0
         gt_rewards = []
 
@@ -159,43 +154,21 @@ def rollout_worker(inputs):
                 velocity_his = np.zeros_like(velocity_his)
 
             beg = time.time()
-            if not robot_exp:
-                data = {
-                    'particles': particle_pos,
-                    'vel_his': velocity_his,
-                    'picker_position': picker_pos,
-                    'action': action,
-                    'picked_points': picked_particles,
-                    'scene_params': scene_params,
-                    'mapped_particle_indices': observable_particle_index,
-                    'mesh_edges': mesh_edges,
-                    'rest_dist': rest_dist,
-                    'initial_particle_pos': initial_particle_pos
-                }
+            data = {
+                'particles': particle_pos,
+                'vel_his': velocity_his,
+                'picker_position': picker_pos,
+                'action': action,
+                'picked_points': picked_particles,
+                'mapped_particle_indices': observable_particle_index,
+                'mesh_edges': mesh_edges,
+                'rest_dist': rest_dist,
+                'initial_particle_pos': initial_particle_pos
+            }
 
-                data_dict = dataset.build_graph(data, input_type=m_name)
+            data_dict = dataset.build_graph(data, input_type=m_name)
 
-            else:  # robot exp
-                # data = [particle_pos, velocity_his, picker_pos,
-                #         action, picked_particles, scene_params, range(observable_pc_num), mesh_edges]
-                data = {
-                    'pointcloud': particle_pos,
-                    'vel_his': velocity_his,
-                    'picker_position': picker_pos,
-                    'action': action,
-                    'picked_points': picked_particles,
-                    'scene_params': scene_params,
-                    'mapped_particle_indices': range(len(particle_pos)),
-                    'mesh_edges': mesh_edges,
-                    'rest_dist': rest_dist,
-                    'initial_particle_pos': initial_particle_pos
-                }
-                data_dict = dataset._prepare_input(
-                    data,
-                    input_type=m_name,
-                    downsample=False,
-                    noise_scale=0,
-                    robot_exp=robot_exp)
+
 
             node_attr, neighbors, edge_attr, picked_particles, picked_status = data_dict['node_attr'], \
                                                                                data_dict['neighbors'], \
@@ -224,9 +197,7 @@ def rollout_worker(inputs):
             with torch.no_grad():
                 pred = cur_dyn(inputs)
                 pred_accel = pred['accel']
-                pred_reward = pred.get('reward_nxt', -torch.ones(1, dtype=torch.float).to(cur_dyn.device))
             pred_accel = pred_accel.cpu().numpy()
-            pred_reward = pred_reward.cpu().numpy()
             model_foward_time.append(time.time() - beg)
 
             # update graph
@@ -237,23 +208,12 @@ def rollout_worker(inputs):
             update_graph_time.append(time.time() - beg)
 
             # get reward of the new position
-            if robot_exp:
-                # reward_pos = np.vstack(
-                #     [filtered_initial_particle, particle_pos])  # Should be equivalent to adding occluded particles
-                reward_pos = particle_pos
-            else:
-                reward_pos = particle_pos
-            # if input['reward_mode'] == 'vis':
-            #     reward_pos = reward_pos[model_input_data['model_vis']]
+            reward_pos = particle_pos
 
             # heuristic reward
 
             reward = reward_model(reward_pos) if reward_model is not None else 0
-            # print("time step {} reward {}".format(t, reward))
-            ret += reward
 
-            pred_rewards[t] = pred_reward
-            gt_pos_rewards[t] = reward
             if t == planning_horizon - 1:
                 # print(model_canon_pos.mean())
                 if task == 'flatten':
@@ -283,8 +243,6 @@ def rollout_worker(inputs):
             info=info,
             mesh_edges=mesh_edges,
             time_cost=time_cost,
-            pred_rewards=pred_rewards,
-            gt_pos_rewards=gt_pos_rewards
         ))
     return results
 

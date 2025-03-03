@@ -21,7 +21,6 @@ def process_any_cloth(rgb, depth, matrix_world_to_camera,
                       input_type='depth',
                       coords=None,
                       cloth_id=None,
-                      info_path='',
                       real_world=False,
                       normalize_func=None,
                       padding=0,
@@ -47,8 +46,7 @@ def process_any_cloth(rgb, depth, matrix_world_to_camera,
     rgb = torch.from_numpy(rgb.copy()).permute(2, 0, 1)
     if real_world and normalize_func is not None:
         depth = normalize_func(depth)
-    # todo: check if we need this
-    # depth = depth * (depth > 0.5) * (depth < 0.6415)
+        
     if padding > 0:
         new_depth = np.pad(depth, padding)
         depth = cv2.resize(new_depth, (200, 200), interpolation=cv2.INTER_NEAREST)
@@ -68,7 +66,7 @@ def process_any_cloth(rgb, depth, matrix_world_to_camera,
             'x': np.copy(pc_sim_s),
             'depth': depth_s.unsqueeze(0),
             'pos': pc_sim_s,
-            # 'cloth_sim_aabb': cloth_sim_aabb
+            # 'cloth_sim_aabb': cloth_sim_aab
         }
     else:
         depth_s = cv2.resize(depth, (200, 200), interpolation=cv2.INTER_NEAREST)
@@ -87,32 +85,14 @@ def process_any_cloth(rgb, depth, matrix_world_to_camera,
         }
 
     if not real_world:
-        # nocs, wnf = gdloader.get_sample(cloth_id)
-        # import pdb
-        # pdb.set_trace()
-        # info = read_h5_dict(info_path)
-        # nocs, wnf = info['cloth_nocs_verts'], info['wnf']
-        V, F = readOBJ(f"dataset/cloth3d/mesh/{cloth_type}/{cloth_id:04d}.obj")[:2]
+        V, F = readOBJ(f"dataset/cloth3d/{cloth_type}/mesh/{cloth_id:04d}.obj")[:2]
         F = quads2tris(F)
-        # TODO: visibility
         assert coords.shape[0] == V.shape[0], f"mesh mismatch {coords.shape[0]}  {V.shape[0]}"
-        # bary_results = get_barycentric_pc(pc_sim, coords, F, {'nocs': nocs})
-        # if input_type == 'pc':
-        #     pc_nocs = bary_results['nocs'][selected_idxs]
-        # else:
-        #     all_uvs = np.array(depth.nonzero()).T
-        #     canon_img = np.zeros((720, 720, 3), dtype=np.float32)
-        #     canon_img[all_uvs[:, 0], all_uvs[:, 1]] = bary_results['nocs']
-        #     canon_img = torch.tensor(cv2.resize(canon_img, (200, 200), interpolation=cv2.INTER_NEAREST))
-        #     pc_nocs = canon_img[data['cloth_uv'][:, 0], data['cloth_uv'][:, 1]]
 
         data.update({
             # privileged information only for evaluation purpose
-            # 'y': pc_nocs,
             'cloth_sim_verts': coords,
-            # 'cloth_nocs_verts': nocs,
             'cloth_tri': F,
-            # 'wnf': wnf
         })
     data_torch = dict(
         (x[0], torch.from_numpy(x[1]) if isinstance(x[1], np.ndarray) else x[1]) for x in data.items())
@@ -295,12 +275,6 @@ def my_collate(batch, key=None):
         if 'cloth_uv' in elem:
             out = None
             elem = elem['cloth_uv']
-            # if torch.utils.data.get_worker_info() is not None:
-            #     # If we're in a background process, concatenate directly into a
-            #     # shared memory tensor to avoid an extra copy
-            #     numel = sum([x['cloth_uv_n'].shape[0] for x in batch])
-            #     storage = elem.storage()._new_shared(numel)
-            #     out = elem.new(storage)
             for i, b in enumerate(batch):
                 batch_id.append(torch.ones(b['cloth_uv'].shape[0], dtype=torch.long) * i)
             result['batch'] = torch.cat(batch_id, 0, out=out)

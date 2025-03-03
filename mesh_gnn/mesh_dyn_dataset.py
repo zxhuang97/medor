@@ -251,8 +251,8 @@ class ClothDynDataset(torch.utils.data.Dataset):
         }
 
         if self.args.train_mode == 'vsbl':
-            data['quad'] = readOBJ(os.path.join('dataset/cloth3d/train',
-                                                self.args.cloth_type, f'{data_cur["cloth_id"]:04d}.obj'))[1]
+            data['quad'] = readOBJ(os.path.join('dataset/cloth3d', self.args.cloth_type,
+                                                f'mesh/{data_cur["cloth_id"]:04d}.obj'))[1]
         if 'full' in self.input_types:
             mesh_edges = data_cur['mesh_edges'].T
             # if self.args.__dict__.get('vsbl_full', False):
@@ -595,7 +595,7 @@ class ClothDynDataset(torch.utils.data.Dataset):
             self.env.reset()
 
             config = env.get_current_config()
-            cloth_path = f'{self.args.cloth3d_dir}/nocs/{env.cloth_type}/{config["cloth_id"]:04d}_info.h5'
+            cloth_path = f'{self.args.cloth3d_dir}/{env.cloth_type}/nocs/{config["cloth_id"]:04d}_info.h5'
             cloth_info = read_h5_dict(cloth_path, ["downsample_id", "mesh_edges"])  # M, Nx2
             cloth_info['cloth_id'] = config["cloth_id"]
 

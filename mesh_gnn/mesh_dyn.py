@@ -56,12 +56,13 @@ class MeshDynamics(object):
         for phase in ['train', 'valid']: self.datasets[phase].vcd_edge = self.vcd_edge
 
         follow_batch = ['x_{}'.format(t) for t in self.input_types]
-        self.dataloaders = {x: torch_geometric.data.DataLoader(
-            self.datasets[x], batch_size=args.batch_size, follow_batch=follow_batch,
-            shuffle=True if x == 'train' else False, drop_last=True,
-            num_workers=args.num_workers, pin_memory=True,
-            prefetch_factor=5 if args.num_workers > 0 else 2)
-            for x in ['train', 'valid']}
+        if not args.eval:
+            self.dataloaders = {x: torch_geometric.data.DataLoader(
+                self.datasets[x], batch_size=args.batch_size, follow_batch=follow_batch,
+                shuffle=True if x == 'train' else False, drop_last=True,
+                num_workers=args.num_workers, pin_memory=True,
+                prefetch_factor=5 if args.num_workers > 0 else 2)
+                for x in ['train', 'valid']}
         self.mat_world_to_cam = get_matrix_world_to_camera(self.env.camera_params[self.env.camera_name])
         self.mse_loss = torch.nn.MSELoss()
         self.log_dir = logger.get_dir()

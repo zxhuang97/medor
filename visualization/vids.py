@@ -2,10 +2,8 @@ import cv2
 import numpy as np
 import pyflex
 
-from deprecated.utils_old.data_utils import get_matrix_world_to_camera
 from visualization.plot_utils import write_number
-
-from utils.camera_utils import project_to_image
+from utils.camera_utils import project_to_image, get_matrix_world_to_camera
 
 
 def set_shape_pos(pos):

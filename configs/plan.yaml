@@ -1,0 +1,69 @@
+debug: false
+m_name: "full"
+camera_name: top_down_camera
+tt_finetune: true
+gpu_num: 1
+seed: 100
+delta_y_range:
+- 0
+- 0.5
+env_name: AnyClothFlatten
+use_pred_rwd: false
+is_train: false
+planning_method: random_shooting
+collect_data: false
+sample_space: mesh
+pick_vis_only: true
+pred_mode: oneshot
+model_path:
+  Trousers: data/release/medor_Trousers/pipeline
+  Skirt: data/release/medor_Skirt/pipeline
+  Tshirt: data/release/medor_Tshirt/pipeline
+  Dress: data/release/medor_Dress/pipeline
+pred_time_interval: 5
+full_dyn_path: data/release/mesh_dyn_Trousers/full_dyn_75.pth
+
+opt_model: false
+opt_mesh_density: dense
+opt_mesh_init: task
+opt_lr: 0.001
+opt_iter_total: 100
+chamfer3d_w: 1.0
+laplacian_w: 0.0
+normal_w: 0.0
+edge_w: 0.0
+depth_w: 0
+silhouette_w: 0
+obs_consist_w: 10.0
+consist_iter: 50
+table_w: 10
+cloth_type: Trousers
+pick_and_place_num: 10
+ambiguity_agnostic: true
+task: flatten
+canon_model: sim
+pos_mode: medor
+mesh_mode: mc
+radius_s: 0.005
+radius_r: 0.01
+test_episodes:
+- 0
+- 1
+- 2
+- 3
+- 4
+- 5
+- 6
+- 7
+- 8
+- 9
+use_wandb: false
+move_distance_range:
+- 0.05
+- 0.2
+pull_step: 10
+wait_step: 6
+cached_states_path: Trousers_hard_v4.pkl
+mc_thres: 0.1
+cem_num_pick: 500
+num_worker: 4
