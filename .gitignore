@@ -1,5 +1,6 @@
 data
 dataset
 wandb
+.cursorignore
 __pycache__
 .idea
