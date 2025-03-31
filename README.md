@@ -56,7 +56,7 @@ We provide the pretrained models for Tshirt, Trousers, Skirt, and Dress:
 
 ### Mesh dynamics model
 We trained a mesh dynamics model on Trousers and found it generalizes well to other categories. We used this model for planning in all experiments.
-- [Trousers](https://drive.google.com/file/d/1-QCSUHySClJncu4JaQ6YgCSYJoFlIsaQ/view?usp=sharing)
+- [Trousers](https://drive.google.com/file/d/1GL2Jx6UnbAwktrxV4zhfmaTtxLjPSSUY/view?usp=sharing)
 
 ## Dataset
 Currently, we only provide dataset for Tshirt. For training and testing, you need to full dataset. 
